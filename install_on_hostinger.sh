@@ -122,7 +122,9 @@ if ! command -v node &> /dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
   apt-get install -y nodejs
 fi
-npm install -g yarn
+if ! command -v yarn &> /dev/null; then
+  npm install -g yarn --force || true
+fi
 
 # Install wkhtmltopdf with patched qt for clean PDF printing
 if ! command -v wkhtmltopdf &> /dev/null; then
