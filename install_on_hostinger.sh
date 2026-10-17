@@ -37,6 +37,9 @@ if [ -z "$SITE_NAME" ]; then
   SITE_NAME="${INPUT_SITE:-$DEFAULT_SITE}"
 fi
 
+# Sanitize SITE_NAME: remove http://, https://, trailing slashes, spaces, and ports
+SITE_NAME=$(echo "$SITE_NAME" | sed -e 's|^https://||' -e 's|^http://||' -e 's|/.*||' -e 's|:[0-9]*$||' | tr -d ' ')
+
 if [ -z "$DB_ROOT_PASSWORD" ]; then
   echo -e "\n${YELLOW}Please enter a secure password for MariaDB root:${NC}"
   read -rsp "MariaDB Root Password: " DB_ROOT_PASSWORD
@@ -153,6 +156,14 @@ pip3 install frappe-bench --break-system-packages 2>/dev/null || pip3 install fr
 echo -e "\n${GREEN}[6/8] Initializing Frappe Bench v15...${NC}"
 BENCH_DIR="/home/frappe/frappe-bench"
 
+# If apps.txt already exists from a prior run, sanitize immediately to prevent import errors
+if [ -f "$BENCH_DIR/sites/apps.txt" ]; then
+  sed -i -e 's/hrmschemical_erp/hrms\nchemical_erp/g' "$BENCH_DIR/sites/apps.txt"
+  sed -i -e 's/erpnextchemical_erp/erpnext\nchemical_erp/g' "$BENCH_DIR/sites/apps.txt"
+  sed -i -e '$a\' "$BENCH_DIR/sites/apps.txt" 2>/dev/null || true
+  chown frappe:frappe "$BENCH_DIR/sites/apps.txt"
+fi
+
 if [ ! -d "$BENCH_DIR" ]; then
   su - frappe -c "bench init --frappe-branch version-15 --python $(which python3) ${BENCH_DIR}"
 fi
@@ -175,7 +186,17 @@ if [ -f "$SCRIPT_DIR/chemical_erp.tar.gz" ]; then
   tar -xzf "$SCRIPT_DIR/chemical_erp.tar.gz" -C "$BENCH_DIR/apps/chemical_erp"
   chown -R frappe:frappe "$BENCH_DIR/apps/chemical_erp"
   su - frappe -c "cd ${BENCH_DIR} && ./env/bin/pip install -e apps/chemical_erp"
-  grep -qxF "chemical_erp" "$BENCH_DIR/sites/apps.txt" 2>/dev/null || echo "chemical_erp" >> "$BENCH_DIR/sites/apps.txt"
+  
+  # Ensure apps.txt is clean and properly formatted (one app per line)
+  if [ -d "$BENCH_DIR/sites" ]; then
+    > "$BENCH_DIR/sites/apps.txt"
+    for app_name in frappe erpnext hrms chemical_erp; do
+      if [ -d "$BENCH_DIR/apps/$app_name" ]; then
+        echo "$app_name" >> "$BENCH_DIR/sites/apps.txt"
+      fi
+    done
+    chown frappe:frappe "$BENCH_DIR/sites/apps.txt"
+  fi
 fi
 
 # Link chemical_erp static assets directly into sites/assets
@@ -186,8 +207,9 @@ chown -R frappe:frappe "$BENCH_DIR/sites/assets/chemical_erp"
 echo -e "\n${GREEN}[7/8] Creating site and migrating database...${NC}"
 
 # Check if site exists
-if [ ! -d "$BENCH_DIR/sites/${SITE_NAME}" ]; then
-  su - frappe -c "cd ${BENCH_DIR} && bench new-site ${SITE_NAME} --mariadb-root-password '${DB_ROOT_PASSWORD}' --admin-password '${ADMIN_PASSWORD}' --no-mariadb-socket"
+if [ ! -f "$BENCH_DIR/sites/${SITE_NAME}/site_config.json" ]; then
+  echo -e "\nCreating new site ${SITE_NAME}..."
+  su - frappe -c "cd ${BENCH_DIR} && bench new-site ${SITE_NAME} --force --mariadb-root-password '${DB_ROOT_PASSWORD}' --admin-password '${ADMIN_PASSWORD}' --no-mariadb-socket"
 else
   echo -e "\nSite ${SITE_NAME} already exists. Proceeding with update."
 fi
@@ -212,24 +234,26 @@ if [ -f "$SCRIPT_DIR/database.sql.gz" ]; then
 
   echo -e "\n${CYAN}Running database migrations...${NC}"
   su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} migrate"
+  su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} set-admin-password '${ADMIN_PASSWORD}'"
   su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} clear-cache"
 fi
 
-# Build front-end production assets
-su - frappe -c "cd ${BENCH_DIR} && bench build --app chemical_erp" 2>/dev/null || true
-
 echo -e "\n${GREEN}[8/8] Configuring Nginx, Supervisor, and Production Services...${NC}"
+su - frappe -c "cd ${BENCH_DIR} && bench config dns_multitenant on"
 su - frappe -c "cd ${BENCH_DIR} && bench setup supervisor --yes"
 su - frappe -c "cd ${BENCH_DIR} && bench setup nginx --yes"
+
+# Remove default Ubuntu nginx welcome site if present
+rm -f /etc/nginx/sites-enabled/default
 
 # Link supervisor and nginx configurations
 ln -sf "$BENCH_DIR/config/supervisor.conf" /etc/supervisor/conf.d/frappe-bench.conf
 ln -sf "$BENCH_DIR/config/nginx.conf" /etc/nginx/conf.d/frappe-bench.conf
 
-supervisorctl reread
-supervisorctl update
-supervisorctl restart all
-systemctl reload nginx
+systemctl enable supervisor
+systemctl restart supervisor || { supervisorctl reread && supervisorctl update && supervisorctl restart all; }
+systemctl enable nginx
+systemctl reload nginx || systemctl restart nginx
 
 # Firewall configuration
 echo -e "\n${CYAN}Configuring UFW Firewall (SSH, HTTP, HTTPS)...${NC}"
