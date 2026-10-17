@@ -116,9 +116,9 @@ EOF
 systemctl restart mariadb
 systemctl enable mariadb
 
-# Set MariaDB root password and secure
-SQL_CMDS="ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}'; DELETE FROM mysql.user WHERE User=''; DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;"
-mysql -u root -p"${DB_ROOT_PASSWORD}" -e "${SQL_CMDS}" 2>/dev/null || mysql -u root -e "${SQL_CMDS}" 2>/dev/null || true
+# Set MariaDB root password and configure native password access
+SQL_CMDS="ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${DB_ROOT_PASSWORD}'); GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION; DELETE FROM mysql.user WHERE User=''; DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;"
+mysql -e "${SQL_CMDS}" 2>/dev/null || mysql -u root -p"${DB_ROOT_PASSWORD}" -e "${SQL_CMDS}" 2>/dev/null || mysql -u root -e "${SQL_CMDS}" 2>/dev/null || true
 
 echo -e "\n${GREEN}[4/8] Installing Node.js, npm, yarn, and wkhtmltopdf...${NC}"
 if ! command -v node &> /dev/null; then
@@ -223,14 +223,41 @@ su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app chemica
 # Restore database and uploaded files from local migration package
 if [ -f "$SCRIPT_DIR/database.sql.gz" ]; then
   echo -e "\n${CYAN}Restoring local database & documents to live site...${NC}"
-  RESTORE_CMD="bench --site ${SITE_NAME} --force restore '${SCRIPT_DIR}/database.sql.gz' --mariadb-root-password '${DB_ROOT_PASSWORD}'"
+  DB_NAME=$(python3 -c "import json; print(json.load(open('${BENCH_DIR}/sites/${SITE_NAME}/site_config.json'))['db_name'])" 2>/dev/null || true)
+  
+  RESTORED=0
+  if [ -n "$DB_NAME" ]; then
+    echo "Directly importing database dump into '${DB_NAME}'..."
+    if gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql "${DB_NAME}" 2>/dev/null; then
+      echo "Database dump successfully imported via root socket."
+      RESTORED=1
+    elif gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql -u root -p"${DB_ROOT_PASSWORD}" "${DB_NAME}" 2>/dev/null; then
+      echo "Database dump successfully imported with root credentials."
+      RESTORED=1
+    fi
+  fi
+
+  if [ "$RESTORED" -eq 0 ]; then
+    echo "Attempting restore via bench CLI..."
+    RESTORE_CMD="bench --site ${SITE_NAME} --force restore '${SCRIPT_DIR}/database.sql.gz' --mariadb-root-password '${DB_ROOT_PASSWORD}'"
+    su - frappe -c "cd ${BENCH_DIR} && ${RESTORE_CMD}" || true
+  fi
+
+  # Restore public uploaded files
   if [ -f "$SCRIPT_DIR/files.tar" ]; then
-    RESTORE_CMD="${RESTORE_CMD} --with-public-files '${SCRIPT_DIR}/files.tar'"
+    echo "Restoring public documents..."
+    mkdir -p "$BENCH_DIR/sites/${SITE_NAME}/public/files"
+    tar -xf "$SCRIPT_DIR/files.tar" -C "$BENCH_DIR/sites/${SITE_NAME}/public/files" 2>/dev/null || true
+    chown -R frappe:frappe "$BENCH_DIR/sites/${SITE_NAME}/public/files"
   fi
+
+  # Restore private uploaded files
   if [ -f "$SCRIPT_DIR/private-files.tar" ]; then
-    RESTORE_CMD="${RESTORE_CMD} --with-private-files '${SCRIPT_DIR}/private-files.tar'"
+    echo "Restoring private documents..."
+    mkdir -p "$BENCH_DIR/sites/${SITE_NAME}/private/files"
+    tar -xf "$SCRIPT_DIR/private-files.tar" -C "$BENCH_DIR/sites/${SITE_NAME}/private/files" 2>/dev/null || true
+    chown -R frappe:frappe "$BENCH_DIR/sites/${SITE_NAME}/private/files"
   fi
-  su - frappe -c "cd ${BENCH_DIR} && ${RESTORE_CMD}"
 
   echo -e "\n${CYAN}Running database migrations...${NC}"
   su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} migrate"
