@@ -114,13 +114,8 @@ systemctl restart mariadb
 systemctl enable mariadb
 
 # Set MariaDB root password and secure
-mysql -u root -p"${DB_ROOT_PASSWORD}" <<EOF 2>/dev/null || mysql -u root <<EOF || true
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-DELETE FROM mysql.user WHERE User='';
-DROP DATABASE IF EXISTS test;
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-FLUSH PRIVILEGES;
-EOF
+SQL_CMDS="ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}'; DELETE FROM mysql.user WHERE User=''; DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;"
+mysql -u root -p"${DB_ROOT_PASSWORD}" -e "${SQL_CMDS}" 2>/dev/null || mysql -u root -e "${SQL_CMDS}" 2>/dev/null || true
 
 echo -e "\n${GREEN}[4/8] Installing Node.js, npm, yarn, and wkhtmltopdf...${NC}"
 if ! command -v node &> /dev/null; then
