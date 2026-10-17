@@ -288,6 +288,14 @@ rm -f /etc/nginx/conf.d/frappe-bench.conf
 chmod 755 /home/frappe
 chmod -R o+rx "$BENCH_DIR/sites/assets" 2>/dev/null || true
 
+# Fix Ubuntu Nginx unknown log format "main" error
+sed -i 's/ main;/;/g' "$BENCH_DIR/config/nginx.conf"
+cat << 'EOF' > /etc/nginx/conf.d/00-log-format.conf
+log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                '$status $body_bytes_sent "$http_referer" '
+                '"$http_user_agent" "$http_x_forwarded_for"';
+EOF
+
 # Link supervisor and nginx configurations
 ln -sf "$BENCH_DIR/config/supervisor.conf" /etc/supervisor/conf.d/frappe-bench.conf
 ln -sf "$BENCH_DIR/config/nginx.conf" /etc/nginx/conf.d/frappe-bench.conf
