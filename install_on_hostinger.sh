@@ -224,11 +224,15 @@ su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app chemica
 if [ -f "$SCRIPT_DIR/database.sql.gz" ]; then
   echo -e "\n${CYAN}Restoring local database & documents to live site...${NC}"
   DB_NAME=$(python3 -c "import json; print(json.load(open('${BENCH_DIR}/sites/${SITE_NAME}/site_config.json'))['db_name'])" 2>/dev/null || true)
+  DB_PASSWORD=$(python3 -c "import json; print(json.load(open('${BENCH_DIR}/sites/${SITE_NAME}/site_config.json'))['db_password'])" 2>/dev/null || true)
   
   RESTORED=0
   if [ -n "$DB_NAME" ]; then
-    echo "Directly importing database dump into '${DB_NAME}'..."
-    if gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql "${DB_NAME}" 2>/dev/null; then
+    echo "Directly importing database dump into '${DB_NAME}' using site credentials..."
+    if [ -n "$DB_PASSWORD" ] && gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql -u "${DB_NAME}" -p"${DB_PASSWORD}" "${DB_NAME}" 2>/dev/null; then
+      echo "Database dump successfully imported using site credentials."
+      RESTORED=1
+    elif gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql "${DB_NAME}" 2>/dev/null; then
       echo "Database dump successfully imported via root socket."
       RESTORED=1
     elif gunzip -c "${SCRIPT_DIR}/database.sql.gz" | mysql -u root -p"${DB_ROOT_PASSWORD}" "${DB_NAME}" 2>/dev/null; then
@@ -270,17 +274,38 @@ su - frappe -c "cd ${BENCH_DIR} && bench config dns_multitenant on"
 su - frappe -c "cd ${BENCH_DIR} && bench setup supervisor --yes"
 su - frappe -c "cd ${BENCH_DIR} && bench setup nginx --yes"
 
-# Remove default Ubuntu nginx welcome site if present
+# Stop and disable apache2 if installed (prevents port 80 conflict)
+systemctl stop apache2 2>/dev/null || true
+systemctl disable apache2 2>/dev/null || true
+
+# Clean up default and duplicate nginx configurations
 rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/frappe-bench.conf
+rm -f /etc/nginx/sites-available/frappe-bench.conf
+rm -f /etc/nginx/conf.d/frappe-bench.conf
+
+# Ensure /home/frappe has executable permissions for www-data
+chmod 755 /home/frappe
+chmod -R o+rx "$BENCH_DIR/sites/assets" 2>/dev/null || true
 
 # Link supervisor and nginx configurations
 ln -sf "$BENCH_DIR/config/supervisor.conf" /etc/supervisor/conf.d/frappe-bench.conf
 ln -sf "$BENCH_DIR/config/nginx.conf" /etc/nginx/conf.d/frappe-bench.conf
 
+# Restart supervisor
 systemctl enable supervisor
 systemctl restart supervisor || { supervisorctl reread && supervisorctl update && supervisorctl restart all; }
+
+# Test Nginx syntax and start
+echo -e "\n${CYAN}Testing and starting Nginx...${NC}"
+nginx -t || true
+
 systemctl enable nginx
-systemctl reload nginx || systemctl restart nginx
+systemctl restart nginx || systemctl reload nginx || {
+  echo -e "${YELLOW}Nginx failed to start. Showing details:${NC}"
+  nginx -t || true
+  systemctl status nginx.service --no-pager || true
+}
 
 # Firewall configuration
 echo -e "\n${CYAN}Configuring UFW Firewall (SSH, HTTP, HTTPS)...${NC}"
