@@ -279,10 +279,8 @@ systemctl stop apache2 2>/dev/null || true
 systemctl disable apache2 2>/dev/null || true
 
 # Clean up default and duplicate nginx configurations
-rm -f /etc/nginx/sites-enabled/default
-rm -f /etc/nginx/sites-enabled/frappe-bench.conf
-rm -f /etc/nginx/sites-available/frappe-bench.conf
-rm -f /etc/nginx/conf.d/frappe-bench.conf
+rm -f /etc/nginx/sites-enabled/*
+rm -f /etc/nginx/conf.d/*
 
 # Ensure /home/frappe has executable permissions for www-data
 chmod 755 /home/frappe
