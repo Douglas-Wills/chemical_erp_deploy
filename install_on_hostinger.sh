@@ -175,7 +175,13 @@ if [ -f "$SCRIPT_DIR/chemical_erp.tar.gz" ]; then
   tar -xzf "$SCRIPT_DIR/chemical_erp.tar.gz" -C "$BENCH_DIR/apps/chemical_erp"
   chown -R frappe:frappe "$BENCH_DIR/apps/chemical_erp"
   su - frappe -c "cd ${BENCH_DIR} && ./env/bin/pip install -e apps/chemical_erp"
+  grep -qxF "chemical_erp" "$BENCH_DIR/sites/apps.txt" 2>/dev/null || echo "chemical_erp" >> "$BENCH_DIR/sites/apps.txt"
 fi
+
+# Link chemical_erp static assets directly into sites/assets
+mkdir -p "$BENCH_DIR/sites/assets"
+ln -sfn "$BENCH_DIR/apps/chemical_erp/chemical_erp/public" "$BENCH_DIR/sites/assets/chemical_erp"
+chown -R frappe:frappe "$BENCH_DIR/sites/assets/chemical_erp"
 
 echo -e "\n${GREEN}[7/8] Creating site and migrating database...${NC}"
 
@@ -210,7 +216,7 @@ if [ -f "$SCRIPT_DIR/database.sql.gz" ]; then
 fi
 
 # Build front-end production assets
-su - frappe -c "cd ${BENCH_DIR} && bench build --app chemical_erp"
+su - frappe -c "cd ${BENCH_DIR} && bench build --app chemical_erp" 2>/dev/null || true
 
 echo -e "\n${GREEN}[8/8] Configuring Nginx, Supervisor, and Production Services...${NC}"
 su - frappe -c "cd ${BENCH_DIR} && bench setup supervisor --yes"
