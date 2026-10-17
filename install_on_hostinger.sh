@@ -114,7 +114,7 @@ systemctl restart mariadb
 systemctl enable mariadb
 
 # Set MariaDB root password and secure
-mysql -u root <<EOF
+mysql -u root -p"${DB_ROOT_PASSWORD}" <<EOF 2>/dev/null || mysql -u root <<EOF || true
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DROP DATABASE IF EXISTS test;
@@ -183,13 +183,17 @@ fi
 echo -e "\n${GREEN}[7/8] Creating site and migrating database...${NC}"
 
 # Check if site exists
-su - frappe -c "cd ${BENCH_DIR} && bench new-site ${SITE_NAME} --mariadb-root-password '${DB_ROOT_PASSWORD}' --admin-password '${ADMIN_PASSWORD}' --no-mariadb-socket"
+if [ ! -d "$BENCH_DIR/sites/${SITE_NAME}" ]; then
+  su - frappe -c "cd ${BENCH_DIR} && bench new-site ${SITE_NAME} --mariadb-root-password '${DB_ROOT_PASSWORD}' --admin-password '${ADMIN_PASSWORD}' --no-mariadb-socket"
+else
+  echo -e "\nSite ${SITE_NAME} already exists. Proceeding with update."
+fi
 
 # Install apps onto the site
 echo -e "\n${CYAN}Installing apps on ${SITE_NAME}...${NC}"
-su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app erpnext"
-su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app hrms"
-su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app chemical_erp"
+su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app erpnext" 2>/dev/null || true
+su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app hrms" 2>/dev/null || true
+su - frappe -c "cd ${BENCH_DIR} && bench --site ${SITE_NAME} install-app chemical_erp" 2>/dev/null || true
 
 # Restore database and uploaded files from local migration package
 if [ -f "$SCRIPT_DIR/database.sql.gz" ]; then
